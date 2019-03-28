@@ -1,0 +1,281 @@
+---
+title: "Data Journalism Project: Gender and the 2018 Hertie CV book"
+author: "Lorenzo Andreoli"
+date: "20/05/2018"
+output: 
+  html_document:
+    number_sections: true
+    toc: true
+    fig_width: 10
+    code_folding: hide  
+    fig_height: 4.5
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+source("packages.r")
+library("hyphenatr")
+library("koRpus")
+library("qdapRegex")
+library("gender")
+library("SnowballC")
+library("RColorBrewer")
+library("wordcloud")
+library("quanteda")
+library("tm")
+```
+
+# The Hertie CV Book: A natural experiment of gender-bias
+Are female students more likely to undervalue themselves?
+
+<br>
+Every year the Hertie School welcomes students from all over the world. The students bring their own “luggage of experiences”, which makes the student community vibrant and interesting. The average Hertie student is hard-working and motivated to do well in class and land prestigious jobs. In the last two years, the school management has begun publishing an online “CV book”  in which the students can write their own short bio, areas of interest, thesis title and languages spoken so as to be more “appealing” to possible future employers. On the side of possible job opportunities, the CV book is a helpful tool for a sociological test: do women undervalue themselves in comparison to men? 
+
+The motto of the Hertie is “understand today, shape tomorrow” and its mission is that of forming young talented individuals that one day will become the next world leaders in politics, business and academia. But what if women unconsciously undersell themselves? 
+
+In a famous TED-talk  in 2012, Sheryl Sandberg, the COO of Facebook, argued that there are so little female leaders because women tend to undervalue themselves and their skills and as a consequence they are undervalued in the workplace. She argues that on the contrary, men tend to show off more and take credit on their abilities. A 2013 study  by Michelle C. Haynes and Madeline E. Heilman confirms this claim as they find that in collaborative contexts, women gave more credit to male teammates and took less credit for themselves. However, they did not credit themselves less if the teammate was a female. 
+
+The Hertie CV book is a perfect natural experiment as it permits me to analyze what female and male students write about themselves and whether there is a difference between the two. Moreover, the students were not aware of this research while they were writing their bios and there should be no major differences between the two groups in terms of biographies.
+
+
+```{r, eval = TRUE, message=FALSE, warning=FALSE}
+#set up connection 
+rD <- rsDriver (check = FALSE)
+remDr <- rD[["client"]]
+url <- "https://www.hertie-school.org/en/cv-book-2018/"
+remDr$navigate(url)
+
+#load the whole page
+xpath <- '//*[contains(concat( " ", @class, " " ), concat( " ", "button--load-more", " " ))]'
+loadmore <- remDr$findElement(using = 'xpath', value = xpath)
+for (i in 1:11) {loadmore$clickElement() 
+        Sys.sleep(6)
+        }
+
+# select the names 
+xpath <- "//*[contains(concat( '', @class, '' ), concat( '', 'grid-item-title', '' ))]"
+nameselection <- remDr$findElement(using = 'xpath', value = xpath)
+# store index page
+output <- remDr$getPageSource(header = TRUE)
+write(output[[1]], file = "cv_names.html")
+# close connection
+remDr$closeServer()
+# parse html and list the names 
+content <- read_html("cv_names.html") 
+namelist <- html_nodes(content, xpath = "//*[contains(concat( '', @class, '' ), concat( '', 'grid-item-title', '' ))]") %>% html_text
+head(namelist, 150) 
+
+#select the countries 
+countries <- html_nodes(content, xpath = "//*[contains(concat( '', @class, '' ), concat( '', 'grid-item-text', '' ))]") %>% html_text
+head(countries, 150) 
+rm_city_state(countries)
+
+#extract first name and last name 
+firstname <- sapply(strsplit(namelist, " "), `[`, 1)
+lastname<- sapply(strsplit(namelist, " "), tail, 1)
+firstname <- as.character(firstname)
+
+# add hyphon to each name and lower cases 
+namelist<- gsub("\\s+","-", namelist)
+namelist<- tolower(namelist)
+namelist
+namelist <- str_replace(namelist, pattern = "ß", replacement = "ss")
+namelist <- str_replace(namelist, pattern = "ü", replacement = "ue")
+namelist <- str_replace(namelist, pattern = "ö", replacement = "oe")
+
+
+######### scrape the cv ##########
+baseurl <- "https://www.hertie-school.org/en/cv-book-2018/detail/student/"
+urls <- paste0(baseurl,rep(namelist, each= 1))
+urls <- paste0(urls, "/")
+urls
+
+names <- paste0(namelist, ".html")
+names
+# set working directory 
+tempwd <- "data/"
+dir.create(tempwd)
+setwd(tempwd)
+
+## download pages 
+folder <- "cv_book_2018"
+dir.create(folder)
+for (i in 1:length(urls)) {
+       if (!file.exists(paste0(folder, names[i]))) {
+               download.file(urls[i], destfile = paste0(folder, names[i])) 
+                Sys.sleep(runif(1, 0, 1))
+        }
+} 
+
+## control that the dowload worked 
+list_files <- list.files(folder, pattern = "0.*")
+list_files_path <-  list.files(folder, pattern = "0.*", full.names = TRUE)
+length(list_files)
+
+## tidy data 
+int1 <- list()
+int2 <- list()
+int3 <- list()
+languages <- list()
+thesis <- list()
+description <- list()
+mppmia<- list()
+for (i in 1:length(list_files_path)) {
+        html_out <- read_html(list_files_path[i])
+        int1[[i]] <- html_nodes(html_out, xpath = "/html/body/div/div[1]/div[2]/div/article/div/div/main/div[2]/div/aside/section[2]/div/div/ul/li[1]") %>% html_text()
+        int2[[i]]<-html_nodes(html_out, xpath = "/html/body/div/div[1]/div[2]/div/article/div/div/main/div[2]/div/aside/section[2]/div/div/ul/li[2]") %>% html_text()
+        int3[[i]]<-html_nodes(html_out, xpath = "/html/body/div/div[1]/div[2]/div/article/div/div/main/div[2]/div/aside/section[2]/div/div/ul/li[3]") %>% html_text()
+        languages[[i]]<- html_nodes(html_out, xpath = "/html/body/div/div[1]/div[2]/div/article/div/div/main/div[2]/div/aside/section[3]/div/div/ul") %>% html_text() %>% rm_non_words()
+        thesis[[i]]<-html_nodes(html_out, xpath = "/html/body/div/div[1]/div[2]/div/article/div/div/main/div[2]/div/aside/section[1]/p/em") %>% html_text() 
+        description[[i]]<- html_nodes(html_out, xpath= "/html/body/div/div[1]/div[2]/div/article/div/div/main/div[2]/div/aside/section[1]/p/text()[1]")%>% html_text() %>% rm_non_words() %>% rm_curly()
+        mppmia[[i]] <- html_nodes(html_out, xpath= "/html/body/div/div[1]/div[2]/div/article/div/div/header/div/text()") %>% html_text() 
+}
+
+#clean variables 
+thesis<- lapply(thesis, function(x) if(identical(x, character(0))) NA_character_ else x)
+thesis<- data.frame(thesis = unlist(thesis))
+thesis$ID <- seq.int(nrow(thesis))
+thesis <- thesis %>% 
+        filter(!ID %in% c(20,25,110,39,40,107))
+
+int3<-lapply(int3, function(x) if(identical(x, character(0))) NA_character_ else x)
+int3<- data.frame(int3 = unlist(int3))
+
+
+description<-lapply(description, function(x) if(identical(x, character(2))) NA_character_ else x)
+description<- data.frame(description = unlist(description))
+description$ID <- seq.int(nrow(description))
+description <- description %>% 
+        filter(!ID %in% c(3,8,35,70,87,88,112,131,145))
+
+int1<- data.frame(int1 = unlist(int1))
+int2<- data.frame(int2 = unlist(int2))
+languages<- data.frame(languages = unlist(languages))
+mppmia<- data.frame(mppmia = unlist(mppmia))
+```
+
+<br>
+The first step consisted of web scraping the 2018 Hertie CV book. The website is a dynamic page, which required a little bit more twisting with the code in order to get an HTML page for each of the students. The final result was 137 CV pages that were differentiated by gender using the first name of each person and the R-package “gender”. 
+
+
+```{r, eval = TRUE, message=FALSE, warning=FALSE}
+
+#combine in a dataframe 
+df <- data.frame(firstname, lastname, int1 , int2, languages, mppmia, description$description, thesis)
+df1<-df
+#
+df[] <- lapply(df, as.character)
+
+#find the gender 
+gender <- gender(df$firstname)
+names(gender)[names(gender) == 'name'] <- 'firstname'
+
+# merge the new dataset 
+df2<- merge(df, gender, by= "firstname")
+df2[] <- lapply(df2, as.character)
+```
+
+<br>
+Some generic information can be drawn from the downloaded data. The areas of interests appear to be different, with male students more prone to focusing on “policy analysis and methods” and female on “civil society”. 
+
+```{r, eval = TRUE, message=FALSE, warning=FALSE}
+
+## what students study 
+g1<- ggplot(df2, aes(x = gender, fill = int1)) + 
+        geom_bar(position="dodge") +
+        theme(axis.text.x = element_text(angle = 90))
+g2<- ggplot(df2, aes(x = gender, fill = int2)) + 
+        geom_bar(position="dodge") +
+        theme(axis.text.x = element_text(angle = 90))
+
+g1_2 <- plot_grid(g1, g2)
+g1_2
+
+##### 
+df2$numwords<- lengths(strsplit(df2$description, "\\W+"))
+
+n_words_total <- df2 %>% group_by(gender) %>%
+        summarise(numwords = mean(numwords)) %>%
+        arrange(desc(numwords))
+
+plot1 <- ggplot(n_words_total, aes(x = reorder(gender, numwords), 
+                                          y = numwords)) +
+        geom_bar(stat='identity',colour="black", fill = "dark red") +
+        geom_text(aes(x = gender, y = 1, 
+                      label = paste0("(",numwords,")",sep="")),
+                  hjust=-0.1, vjust=.5, size = 2.5, colour = 'white') +
+        labs(x = 'Gender',
+             y = 'Number of Words', 
+             title = 'Average lenght of biographies by gender') +
+        theme_bw()+
+        theme(axis.text.x = element_text(angle = 90),
+              axis.text.y = element_text(size = 10),
+              plot.title = element_text(size=10, face = "bold"),
+              axis.title.x = element_text(size = 10),
+              axis.title.y = element_text(size = 10),
+              legend.text = element_text(size = 10)) +
+        coord_flip() 
+plot1
+        
+
+##### speech
+myDict <- dictionary(list(success = c("success", "achieve", "achieved", "won", "best", 
+                                              "great", "perfect", "victory", "perfomance", "first", "top", "enforc", 
+                                              "extraordinary", "amazing", "achievement"))) 
+
+# male speech
+malespeech<- df2 %>% 
+        filter(gender %in% "male")
+corpus <- Corpus(VectorSource(malespeech$description.description))
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, stripWhitespace)
+corpus <- tm_map(corpus, function(x) removeWords(x, stopwords()))
+tdm <-TermDocumentMatrix(corpus, control=list(wordLengths=c(3,Inf)))
+freq <- slam::row_sums(tdm)
+words <- names(freq)
+m <- as.matrix(tdm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+head(d, 20)
+
+wordcloud(words, freq, min.freq=1, max.words=2000, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+
+barman<-barplot(d[1:10,]$freq, las = 2, names.arg = d[1:10,]$word,
+        col ="lightblue", main ="Most frequent words by male students",
+        ylab = "Word frequencies for male")
+barman
+
+# female speech 
+femalespeech<-df2 %>% 
+        filter(gender %in% "female")
+corpus <- Corpus(VectorSource(femalespeech$description.description))
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, stripWhitespace)
+corpus <- tm_map(corpus, function(x) removeWords(x, stopwords()))
+tdm <-TermDocumentMatrix(corpus, control=list(wordLengths=c(3,Inf)))
+freq <- slam::row_sums(tdm)
+words <- names(freq)
+m <- as.matrix(tdm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+head(d, 20)
+
+wordcloud(words, freq, min.freq=1, max.words=2000, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+
+barwoman<-barplot(d[1:10,]$freq, las = 2, names.arg = d[1:10,]$word,
+        col ="lightgreen", main ="Most frequent words by female students",
+        ylab = "Word frequencies for female")
+barwoman
+```
+
+<br>
+However, the most interesting conclusions can be derived from their biographies. An initial test to check whether female students tend to undervalue themselves can be estimated by looking at how many words each student used in their biographies. The result shows that the mean values are similar, with female students having actually more words than male students. 
+
+One final interesting result can be seen in what words the students used in their descriptions. The two word-clouds compare male and female students (figure 3 and figure 4). 
+
+Lastly, a more precise comparison of the 10th most used words by gender in the biographies can be seen in figure 5. 
+
+In conclusion, it can be noted that there are no major differences between the genders in regards to how much each student wrote for the biographies, even though the word-limit imposed by the career service center might have influenced the results. Nonetheless, there are differences on the topics of interests and in which words were used in the biographies. It can be said that the female population at the Hertie School of Governance do not undersell themselves in comparison to the male student population. Thus, there is no gender imbalance.
